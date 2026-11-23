@@ -1,17 +1,17 @@
 /// A token with text and start/end offsets
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
     start: usize,
     end: usize,
     text: String,
 }
 
-
 impl Token {
     pub fn new(start: usize, end: usize, text: &str) -> Self {
-        Self { 
-            start, end, 
-            text: text.to_string() 
+        Self {
+            start,
+            end,
+            text: text.to_string(),
         }
     }
 
@@ -27,7 +27,3 @@ impl Token {
         &self.text
     }
 }
-
-
-
-

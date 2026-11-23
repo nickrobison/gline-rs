@@ -26,6 +26,120 @@ const TENSOR_REL_LOGITS: &str = "rel_logits";
 const TENSOR_REL_IDX: &str = "rel_idx";
 const TENSOR_REL_MASK: &str = "rel_mask";
 
+/// Decoding of the native relation outputs on their own.
+///
+/// Used as the second pass of the static-capacity RELEX flow: the graph emits
+/// `rel_idx` slot indices (`span_idx` positions fed by the caller), and every
+/// slot `i < n` corresponds to the `i`-th decoded entity span, so the slot
+/// indices double as span-list indices. The caller validates them against the
+/// decoded span list.
+pub struct RelationsToDecoded {
+    relation_threshold: f32,
+}
+
+impl RelationsToDecoded {
+    pub fn new(relation_threshold: f32) -> Self {
+        Self { relation_threshold }
+    }
+
+    pub fn outputs() -> [&'static str; 4] {
+        [
+            TENSOR_LOGITS,
+            TENSOR_REL_LOGITS,
+            TENSOR_REL_IDX,
+            TENSOR_REL_MASK,
+        ]
+    }
+
+    /// Decode the relation tensors into per-sequence relations.
+    ///
+    /// `max_spans` caps the slot indices the caller can map back to decoded
+    /// spans; pairs referencing a slot beyond it are dropped.
+    pub fn decode(
+        &self,
+        input: &TensorOutput,
+        max_spans: &[usize],
+    ) -> Result<Vec<Vec<RelexRelation>>> {
+        let context = &input.context;
+        let batch_size = context.texts.len();
+
+        let rel_logits_arr = input
+            .tensors
+            .get(TENSOR_REL_LOGITS)
+            .ok_or("rel_logits not found in model output")?
+            .try_extract_array::<f32>()?;
+        let rel_idx_arr = input
+            .tensors
+            .get(TENSOR_REL_IDX)
+            .ok_or("rel_idx not found in model output")?
+            .try_extract_array::<i64>()?;
+        let rel_mask_arr = input
+            .tensors
+            .get(TENSOR_REL_MASK)
+            .ok_or("rel_mask not found in model output")?
+            .try_extract_array::<bool>()?;
+
+        let rel_logits_shape = rel_logits_arr.shape();
+        let num_pairs = rel_logits_shape[1];
+        let num_rels = context.relations.len();
+
+        let rel_mask_v = rel_mask_arr.slice(ndarray::s![.., ..]);
+
+        let mut relations: Vec<Vec<RelexRelation>> = Vec::with_capacity(batch_size);
+        for sequence_id in 0..batch_size {
+            let rel_idx_v = rel_idx_arr.slice(ndarray::s![sequence_id, .., ..]);
+            let rel_logits_v = rel_logits_arr.slice(ndarray::s![sequence_id, .., ..]);
+
+            let mut sequence_relations: Vec<RelexRelation> = Vec::new();
+            for pair in 0..num_pairs {
+                let subject = rel_idx_v.get((pair, 0)).copied().unwrap_or(-1);
+                let object = rel_idx_v.get((pair, 1)).copied().unwrap_or(-1);
+                if !rel_mask_v
+                    .get((sequence_id, pair))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                if subject < 0 || object < 0 {
+                    continue;
+                }
+                let (subject, object) = (subject as usize, object as usize);
+                if subject >= max_spans.get(sequence_id).copied().unwrap_or(0)
+                    || object >= max_spans.get(sequence_id).copied().unwrap_or(0)
+                {
+                    continue;
+                }
+                for rel_id in 0..num_rels {
+                    // one logit per configured relation: there is no background
+                    // column in `rel_logits`, an unrelated pair simply scores
+                    // below the threshold for every class.
+                    let prob = sigmoid(rel_logits_v.get((pair, rel_id)).copied().unwrap_or(0.0));
+                    if prob > self.relation_threshold {
+                        sequence_relations.push(RelexRelation {
+                            subject_index: subject,
+                            object_index: object,
+                            predicate: context.relations[rel_id].clone(),
+                            probability: prob,
+                        });
+                    }
+                }
+            }
+            relations.push(sequence_relations);
+        }
+
+        Ok(relations)
+    }
+}
+
+impl Composable<TensorOutput<'_>, Vec<Vec<RelexRelation>>> for RelationsToDecoded {
+    fn apply(&self, input: TensorOutput) -> Result<Vec<Vec<RelexRelation>>> {
+        // Standalone use (no span list at hand): accept every valid slot.
+        let unbounded = vec![usize::MAX; input.context.texts.len()];
+        self.decode(&input, &unbounded)
+    }
+}
+
 /// A relation between two entity spans, as decoded from the native RELEX outputs.
 #[derive(Debug, Clone)]
 pub struct RelexRelation {
@@ -139,70 +253,15 @@ impl TensorsToDecoded {
                 .apply(sorted_spans)?;
 
         // ------------------------------------------------------------------
-        // Relations from the native RELEX outputs.
+        // Relations from the native RELEX outputs. On the legacy 4-input
+        // export these tensors are structurally constant (rel_idx filled with
+        // -1, rel_mask all false), so this loop decodes nothing there; on the
+        // static-capacity export the single-run decode is not used at all
+        // (see `RelexRunner`).
         // ------------------------------------------------------------------
-        let rel_logits_arr = input
-            .tensors
-            .get(TENSOR_REL_LOGITS)
-            .ok_or("rel_logits not found in model output")?
-            .try_extract_array::<f32>()?;
-        let rel_idx_arr = input
-            .tensors
-            .get(TENSOR_REL_IDX)
-            .ok_or("rel_idx not found in model output")?
-            .try_extract_array::<i64>()?;
-        let rel_mask_arr = input
-            .tensors
-            .get(TENSOR_REL_MASK)
-            .ok_or("rel_mask not found in model output")?
-            .try_extract_array::<bool>()?;
-
-        let rel_logits_shape = rel_logits_arr.shape();
-        let num_pairs = rel_logits_shape[1];
-        let num_rels = context.relations.len();
-
-        let rel_mask_v = rel_mask_arr.slice(ndarray::s![.., ..]);
-
-        let mut relations: Vec<Vec<RelexRelation>> = Vec::with_capacity(batch_size);
-        for sequence_id in 0..batch_size {
-            let rel_idx_v = rel_idx_arr.slice(ndarray::s![sequence_id, .., ..]);
-            let rel_logits_v = rel_logits_arr.slice(ndarray::s![sequence_id, .., ..]);
-
-            let mut sequence_relations: Vec<RelexRelation> = Vec::new();
-            for pair in 0..num_pairs {
-                let subject = rel_idx_v.get((pair, 0)).copied().unwrap_or(-1);
-                let object = rel_idx_v.get((pair, 1)).copied().unwrap_or(-1);
-                if !rel_mask_v
-                    .get((sequence_id, pair))
-                    .copied()
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                if subject < 0 || object < 0 {
-                    continue;
-                }
-                if subject as usize >= span_output.spans[sequence_id].len()
-                    || object as usize >= span_output.spans[sequence_id].len()
-                {
-                    continue;
-                }
-                for rel_id in 0..num_rels {
-                    // relation classes are 1-indexed within the logits tensor (class 0 is the background)
-                    let class = (rel_id + 1) as usize;
-                    let prob = sigmoid(rel_logits_v.get((pair, class)).copied().unwrap_or(0.0));
-                    if prob > self.relation_threshold {
-                        sequence_relations.push(RelexRelation {
-                            subject_index: subject as usize,
-                            object_index: object as usize,
-                            predicate: context.relations[rel_id].clone(),
-                            probability: prob,
-                        });
-                    }
-                }
-            }
-            relations.push(sequence_relations);
-        }
+        let max_spans: Vec<usize> = span_output.spans.iter().map(|s| s.len()).collect();
+        let relations =
+            RelationsToDecoded::new(self.relation_threshold).decode(input, &max_spans)?;
 
         Ok(RelexOutput {
             spans: span_output,

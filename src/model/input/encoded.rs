@@ -5,6 +5,7 @@ use composable::Composable;
 use ndarray::{Array, Array2, ArrayView};
 
 /// Represents encoded prompts (after sub-word tokenization)
+#[derive(Clone)]
 pub struct EncodedInput {
     pub texts: Vec<String>,
     pub tokens: Vec<Vec<Token>>,
