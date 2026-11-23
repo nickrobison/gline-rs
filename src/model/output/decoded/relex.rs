@@ -218,8 +218,6 @@ impl TensorsToDecoded {
             .get(TENSOR_LOGITS)
             .ok_or("logits not found in model output")?;
         let array = logits.try_extract_array::<f32>()?;
-        let native_shape: Vec<i64> = logits.shape().iter().map(|&d| d as i64).collect();
-        let _ = native_shape;
         let permuted = array.permuted_axes(vec![3usize, 0, 1, 2]);
 
         let mut spans: Vec<Vec<Span>> = Vec::with_capacity(batch_size);
