@@ -11,7 +11,6 @@
 use super::super::super::pipeline::context::EntityContext;
 use super::super::encoded::EncodedInput;
 use crate::util::result::Result;
-use composable::Composable;
 use ndarray::{Array2, Array3};
 use ort::session::SessionInputs;
 
@@ -52,16 +51,21 @@ impl SpanSlots {
 
     /// Slots backed by the given word-level spans, one list per sequence.
     ///
-    /// Sequences with more spans than [`RELEX_MAX_SLOTS`] keep their first
-    /// spans (the remainder simply cannot form relations).
-    pub fn from_word_spans(spans: &[Vec<(usize, usize)>]) -> Self {
+    /// Slot `i` always corresponds to span `i`: an entry of `None` leaves its
+    /// slot invalid (masked out) rather than shifting the following spans down,
+    /// so a slot index in `rel_idx` can never be attributed to the wrong span.
+    /// Sequences with more entries than [`RELEX_MAX_SLOTS`] keep their first
+    /// slots (the remainder simply cannot form relations).
+    pub fn from_word_spans(spans: &[Vec<Option<(usize, usize)>>]) -> Self {
         let batch = spans.len();
         let mut slots = Self::zero(batch);
         for (sequence, words) in spans.iter().enumerate() {
-            for (slot, &(start, end)) in words.iter().take(RELEX_MAX_SLOTS).enumerate() {
-                slots.idx[[sequence, slot, 0]] = start as i64;
-                slots.idx[[sequence, slot, 1]] = end as i64;
-                slots.mask[[sequence, slot]] = 1;
+            for (slot, word) in words.iter().take(RELEX_MAX_SLOTS).enumerate() {
+                if let Some(&(start, end)) = word.as_ref() {
+                    slots.idx[[sequence, slot, 0]] = start as i64;
+                    slots.idx[[sequence, slot, 1]] = end as i64;
+                    slots.mask[[sequence, slot]] = 1;
+                }
             }
         }
         slots
@@ -119,16 +123,5 @@ impl RelexTensors<'_> {
             TENSOR_SPAN_IDX,
             TENSOR_SPAN_MASK,
         ]
-    }
-}
-
-/// Composable: Encoded => RelexTensors (all slots invalid — entity pass)
-#[derive(Default)]
-pub struct EncodedToZeroSlotTensors {}
-
-impl<'a> Composable<EncodedInput, RelexTensors<'a>> for EncodedToZeroSlotTensors {
-    fn apply(&self, input: EncodedInput) -> Result<RelexTensors<'a>> {
-        let batch = input.texts.len();
-        RelexTensors::from(input, SpanSlots::zero(batch))
     }
 }

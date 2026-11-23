@@ -186,7 +186,11 @@ impl<S: Splitter, T: Tokenizer> RelexRunner<S, T> {
         let entity_output = decoder.apply(tensor_output)?;
 
         // ---- slots: map decoded spans (char offsets) back to word indices ----
-        let word_spans: Vec<Vec<(usize, usize)>> = entity_output
+        // Slot `i` must correspond to span `i`: an unmappable span becomes
+        // `None` (its slot stays masked out) rather than being dropped, which
+        // would shift every later span down one slot and misattribute the
+        // relations decoded for them.
+        let word_spans: Vec<Vec<Option<(usize, usize)>>> = entity_output
             .spans
             .spans
             .iter()
@@ -195,7 +199,7 @@ impl<S: Splitter, T: Tokenizer> RelexRunner<S, T> {
                 let tokens = encoded.tokens.get(sequence).cloned().unwrap_or_default();
                 spans
                     .iter()
-                    .filter_map(|span| {
+                    .map(|span| {
                         let (start, end) = span.offsets();
                         let start_word = tokens.iter().position(|t| t.start() == start)?;
                         let end_word = tokens.iter().position(|t| t.end() == end)?;
