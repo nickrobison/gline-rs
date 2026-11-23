@@ -88,7 +88,7 @@ impl TensorsToDecoded {
     /// * `score(i) >= threshold`
     /// * `score(j) >= threshold`.
     /// * `c` == `class(i) == class(j)`
-    fn generate_spans(
+    pub fn generate_spans(
         &self,
         scores_start: &ndarray::ArrayView2<f32>,
         scores_end: &ndarray::ArrayView2<f32>,
@@ -117,7 +117,7 @@ impl TensorsToDecoded {
     /// Computes the score of a span, defined as the mean of the inside scores (see above).
     /// Spans with one or more inside scores below the threshold will return a zero score,
     /// since they should be discarded.
-    fn compute_span_score(
+    pub fn compute_span_score(
         &self,
         span: (usize, usize, usize),
         scores_inside: &ndarray::ArrayView2<f32>,

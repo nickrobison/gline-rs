@@ -33,6 +33,7 @@ impl TokenTensors<'_> {
                 texts: encoded.texts,
                 tokens: encoded.tokens,
                 entities: encoded.entities,
+                relations: encoded.relations,
                 num_words: encoded.num_words,
             },
         })

@@ -1,22 +1,23 @@
 //! Processing parameters
 
-
 /// Represents the set of parameters for the whole pipeline
-/// 
+///
 /// * pre-processing
 /// * post-processing
-/// 
+///
 /// The easiest way to instanciate sound parameters is to use the
 /// `default()` constructor and then use individual setters as needed.
 pub struct Parameters {
     /// Probability threshold (default: 0.5)
-    pub threshold: f32,    
+    pub threshold: f32,
+    /// Probability threshold for relations (default: 0.5)
+    pub relation_threshold: f32,
     /// Setting this parameter to `true` means that no entity can overlap with another one (default: true)
     pub flat_ner: bool,
     /// If `flat_ner=false`, setting this parameter to `true` means that overlapping spans can belong to the *same* class (default: false)
     pub dup_label: bool,
     /// If `flat_ner=false`, setting this parameter to `true` means that overlapping spans can belong to *different* classes (default: false)
-    pub multi_label: bool,    
+    pub multi_label: bool,
     /// For span mode, maximum span width (default: 12)
     pub max_width: usize,
     /// Maximum sequence length (default: 512)
@@ -26,23 +27,25 @@ pub struct Parameters {
 impl Default for Parameters {
     /// Default configuration, which can be safely used in most cases
     fn default() -> Self {
-        Self::new(
-            0.5, 
-            12, 
-            Some(512),
-            true,             
-            false,
-            false,
-        )
+        Self::new(0.5, 0.5, 12, Some(512), true, false, false)
     }
 }
 
 impl Parameters {
     /// New configuration specifying every parameter
-    pub fn new(threshold: f32, max_width: usize, max_length: Option<usize>, flat_ner: bool, dup_label: bool, multi_label: bool) -> Self {
-        Self { 
-            threshold, 
-            max_width, 
+    pub fn new(
+        threshold: f32,
+        relation_threshold: f32,
+        max_width: usize,
+        max_length: Option<usize>,
+        flat_ner: bool,
+        dup_label: bool,
+        multi_label: bool,
+    ) -> Self {
+        Self {
+            threshold,
+            relation_threshold,
+            max_width,
             max_length,
             flat_ner,
             dup_label,
@@ -52,6 +55,11 @@ impl Parameters {
 
     pub fn with_threshold(mut self, threshold: f32) -> Self {
         self.threshold = threshold;
+        self
+    }
+
+    pub fn with_relation_threshold(mut self, relation_threshold: f32) -> Self {
+        self.relation_threshold = relation_threshold;
         self
     }
 
@@ -79,5 +87,4 @@ impl Parameters {
         self.multi_label = multi_label;
         self
     }
-
 }
